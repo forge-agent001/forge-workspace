@@ -10,6 +10,15 @@ OpenClaw uses a two-layer memory system:
 1. **Short-term**: Session context (compacted when full)
 2. **Long-term**: Markdown files + vector search index
 
+## Configuration History
+
+| Date | Change | Description |
+|------|--------|-------------|
+| 2026-02-02 | Initial setup | Basic memory search with Gemini embeddings |
+| 2026-02-02 | Local embeddings | Switched to local embedding model (Gemma 300M) |
+| 2026-02-02 | Session memory | Enabled experimental session transcript indexing |
+| 2026-02-02 | Extra paths | Added docs/, research/, forge-workspace/ to index |
+
 ## Memory Files
 
 ### File Structure
@@ -42,12 +51,19 @@ workspace/
 
 ### Current Settings
 
+**File**: `~/.openclaw/openclaw.json`
+
 ```json
 {
   "agents": {
     "defaults": {
       "memorySearch": {
         "enabled": true,
+        "provider": "local",
+        "local": {
+          "modelPath": "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf"
+        },
+        "fallback": "gemini",
         "sources": ["memory", "sessions"],
         "extraPaths": ["docs", "research", "forge-workspace"],
         "experimental": {
@@ -78,18 +94,37 @@ workspace/
 
 | Feature | Status | Details |
 |---------|--------|---------|
-| **Vector search** | ✅ Enabled | Semantic similarity (Gemini embeddings) |
+| **Vector search** | ✅ Enabled | Semantic similarity (local Gemma 300M embeddings) |
 | **Hybrid search** | ✅ Default | BM25 + Vector (70/30 weight) |
 | **Embedding cache** | ✅ Enabled | 50,000 entries max |
 | **Session memory** | ✅ Enabled | Indexes past conversations |
 | **sqlite-vec** | ✅ Auto | SQLite extension for fast vector search |
+| **Local embeddings** | ✅ Active | node-llama-cpp with Gemma 300M |
 
 ### Embedding Provider
 
-- **Provider**: Gemini (auto-selected)
-- **Model**: `gemini-embedding-001`
-- **API Key**: Uses `models.providers.google.apiKey`
-- **Fallback**: None configured (Gemini is primary)
+- **Provider**: Local (`node-llama-cpp`)
+- **Model**: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf`
+- **Location**: `~/.node-llama-cpp/models/hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`
+- **Size**: 313 MB
+- **Fallback**: Gemini (if local fails)
+
+### Local Embeddings Setup
+
+**Why local:**
+- Zero API costs for embeddings
+- Privacy (embeddings stay on device)
+- Works offline
+- Lower latency (~10-100ms vs ~50-200ms)
+
+**Setup steps taken:**
+1. Rebuilt native bindings: `npm rebuild node-llama-cpp`
+2. Downloaded model: Auto-downloaded on first use via HuggingFace
+3. Configured provider: Set `provider: "local"` in config
+4. Cleared old index: Removed Gemini-built index
+5. Verified: Tested memory search returns results with local provider
+
+**Note:** First-time indexing after provider change takes ~30-60 seconds. Subsequent searches are fast.
 
 ## Memory Flush (Pre-Compaction)
 
@@ -154,26 +189,27 @@ Indexes past session transcripts for semantic search:
 
 | Operation | Cost | Notes |
 |-----------|------|-------|
-| **Initial index** | ~$0.01-0.05 | One-time per file |
-| **Daily updates** | Negligible | Only new/changed chunks |
-| **Session indexing** | ~$0.001-0.01 | Per session (experimental) |
+| **Initial index** | $0 | Local embeddings = no API cost |
+| **Daily updates** | $0 | Only new/changed chunks |
+| **Session indexing** | $0 | Per session (experimental) |
 | **Search queries** | Free | No cost for retrieval |
+| **Fallback (Gemini)** | ~$0.001/query | Only if local fails |
+
+**Monthly savings estimate:** Previously ~$0.50-2.00/month with Gemini embeddings → Now $0 with local embeddings.
 
 ## Future Improvements
 
 Potential upgrades to consider:
 
-1. **Local embeddings** - Avoid API calls entirely
-   ```json
-   "provider": "local",
-   "local": { "modelPath": "hf:ggml-org/embeddinggemma-300M-GGUF/..." }
-   ```
+1. ✅ **Local embeddings** - ~~Avoid API calls entirely~~ **IMPLEMENTED 2026-02-02**
 
 2. **Hybrid weight tuning** - Adjust 70/30 split based on usage patterns
 
 3. **Additional extraPaths** - Index other project directories
 
-4. **Batch indexing** - For large backfills (OpenAI Batch API)
+4. **Model quality upgrade** - Switch to larger local model if needed (e.g., 1B+ parameters)
+
+5. **GPU acceleration** - Use Metal on Mac for faster embedding generation
 
 ## Maintenance
 
@@ -196,6 +232,8 @@ Potential upgrades to consider:
 | Old sessions not found | Session indexing is async; may take a moment |
 | Wrong file in results | Check `extraPaths` includes the directory |
 | Slow searches | Ensure sqlite-vec is loaded (check logs) |
+| "attempt to write a readonly database" | Restart gateway: `openclaw gateway restart` or kill stale process |
+| Local embeddings not loading | Check model file exists at `~/.node-llama-cpp/models/` |
 
 ## References
 
